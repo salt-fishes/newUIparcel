@@ -1,0 +1,743 @@
+package com.chenran.parcel.util
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
+import com.chenran.parcel.model.SmsModel
+import com.chenran.parcel.viewmodel.ParcelViewModel
+import com.chenran.parcel.util.SmsParser
+import com.chenran.parcel.util.isSameDay
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
+
+fun loadCustomRulesToParser(context: Context, parser: SmsParser) {
+    getCustomList(context, "address").forEach { if (it.isNotBlank()) parser.addCustomAddressPattern(it) }
+    getCustomList(context, "code").forEach { if (it.isNotBlank()) parser.addCustomCodePattern(it) }
+    getCustomList(context, "locker").forEach { if (it.isNotBlank()) parser.addCustomLockerPattern(it) }
+    getCustomList(context, "ignoreKeywords").forEach { if (it.isNotBlank()) parser.addIgnoreKeyword(it) }
+}
+
+
+// 保存时间index
+fun saveIndex(context: Context, index: Int) {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+    editor.putInt("timeFilterIndex", index)
+    editor.apply()
+}
+
+// 从 SharedPreferences 读取时间index
+fun getIndex(context: Context): Int {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sharedPreferences.getInt("timeFilterIndex", 3)
+}
+
+// 保存字符串列表到 SharedPreferences
+fun saveCustomList(context: Context, key: String, stringSet: Set<String>) {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+    editor.putStringSet(key, stringSet)
+    editor.apply()
+}
+
+// 从 SharedPreferences 读取字符串列表
+fun getCustomList(context: Context, key: String): MutableSet<String> {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sharedPreferences.getStringSet(key, mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+}
+
+// 添加单个字符串到存储的字符串列表
+fun addCustomList(context: Context, key: String, newString: String) {
+    // 读取已有的字符串集合
+    val existingSet = getCustomList(context, key)
+    // 添加新的字符串
+    existingSet.add(newString)
+    // 保存更新后的集合
+    saveCustomList(context, key, existingSet)
+}
+
+fun removeCompletedId(context: Context, viewModel: ParcelViewModel, sms: SmsModel) {
+    val key = "${sms.id}_${sms.timestamp}"
+    val completedIds = getCustomList(context, "completedIds")
+    completedIds.remove(key)
+    completedIds.remove(sms.id)
+    saveCustomList(context, "completedIds", completedIds)
+    viewModel.removeCompletedId(key)
+    viewModel.removeCompletedId(sms.id)
+}
+
+fun addCompletedIds(context: Context, viewModel: ParcelViewModel, smsList: List<SmsModel>) {
+    val completedIds = getCustomList(context, "completedIds")
+    val newKeys = smsList.map { "${it.id}_${it.timestamp}" }
+    completedIds.addAll(newKeys)
+    saveCustomList(context, "completedIds", completedIds)
+    viewModel.addCompletedIds(newKeys)
+}
+
+fun getAllSaveData(context: Context, viewModel: ParcelViewModel) {
+    val listAddr = getCustomList(context, "address").toMutableList()
+    val listCode = getCustomList(context, "code").toMutableList()
+    val listLocker = getCustomList(context, "locker").toMutableList()
+    val completedIds = getCustomList(context, "completedIds").toMutableList()
+    val ignoreKeywords = getCustomList(context, "ignoreKeywords").toMutableList()
+    val timeFilterIndex = getIndex(context)
+    val sortByLocker = getSortByLocker(context)
+
+    listAddr.forEach {
+        viewModel.addCustomAddressPattern(it)
+    }
+    listCode.forEach {
+        viewModel.addCustomCodePattern(it)
+    }
+    listLocker.forEach {
+        viewModel.addCustomLockerPattern(it)
+    }
+    ignoreKeywords.forEach {
+        viewModel.addIgnoreKeyword(it)
+    }
+    viewModel.setTimeFilterIndex(timeFilterIndex)
+    viewModel.setAllCompletedIds(completedIds)
+}
+
+fun getSortByLocker(context: Context): Boolean {
+    return try {
+        val prefs = context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+        prefs.getBoolean("sort_by_locker", false)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+fun saveSortByLocker(context: Context, sort: Boolean) {
+    try {
+        val prefs = context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        editor.putBoolean("sort_by_locker", sort)
+        editor.apply()
+    } catch (_: Exception) { }
+}
+
+
+fun clearCustomPattern(
+    context: Context,
+    key: String,
+    pattern: String,
+    viewModel: ParcelViewModel
+) {
+
+    val listPatterns = getCustomList(context, key)
+    listPatterns.remove(pattern)
+    saveCustomList(context, key, listPatterns)
+
+    viewModel.clearAllCustomPatterns()
+    getAllSaveData(context,viewModel)
+}
+
+fun clearAllCustomPatterns(context: Context, viewModel: ParcelViewModel) {
+    saveCustomList(context, "address", mutableSetOf())
+    saveCustomList(context, "code", mutableSetOf())
+    saveCustomList(context, "locker", mutableSetOf())
+    saveCustomList(context, "ignoreKeywords", mutableSetOf())
+    viewModel.clearAllCustomPatterns()
+}
+
+// 保存自定义短信
+fun addCustomSms(context: Context, sms: SmsModel) {
+    val customSmsList = getCustomSmsList(context).toMutableList()
+    customSmsList.add(sms)
+    // 限制列表上限，防止无限增长导致读取超时
+    if (customSmsList.size > 500) {
+        customSmsList.subList(0, customSmsList.size - 500).clear()
+    }
+    saveCustomSmsList(context, customSmsList)
+}
+
+// 获取自定义短信列表
+fun getCustomSmsList(context: Context): List<SmsModel> {
+    return getCustomSmsByTimeFilter(context, 0)
+}
+
+// 获取自定义短信列表（带时间过滤）
+fun getCustomSmsByTimeFilter(context: Context, daysFilter: Int): List<SmsModel> {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val jsonString = sharedPreferences.getString("custom_sms_list", "[]") ?: "[]"
+    
+    val allCustomSms = try {
+        Json.decodeFromString<List<SmsModel>>(jsonString)
+    } catch (e: Exception) {
+        addLog(context, "解析自定义短信列表失败: ${e.message}")
+        emptyList()
+    }
+    
+    addLog(context, "读取自定义短信: 共${allCustomSms.size}条, daysFilter=$daysFilter")
+    
+    // 如果没有时间过滤，返回所有自定义短信
+    if (daysFilter <= 0) {
+        return allCustomSms
+    }
+    
+    // 计算从00:00:00开始的时间范围
+    val calendar = java.util.Calendar.getInstance()
+    calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    calendar.set(java.util.Calendar.MINUTE, 0)
+    calendar.set(java.util.Calendar.SECOND, 0)
+    calendar.set(java.util.Calendar.MILLISECOND, 0)
+    
+    // 减去天数
+    calendar.add(java.util.Calendar.DAY_OF_YEAR, -(daysFilter - 1))
+    val startTime = calendar.timeInMillis
+    
+    // 过滤自定义短信，只返回在时间范围内的
+    return allCustomSms.filter { sms ->
+        sms.timestamp >= startTime
+    }
+}
+
+// 删除自定义短信
+fun removeCustomSms(context: Context, smsId: String) {
+    val customSmsList = getCustomSmsList(context).toMutableList()
+    customSmsList.removeAll { it.id == smsId }
+    saveCustomSmsList(context, customSmsList)
+}
+
+// 保存自定义短信列表
+private fun saveCustomSmsList(context: Context, smsList: List<SmsModel>) {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+    val jsonString = Json.encodeToString(smsList)
+    editor.putString("custom_sms_list", jsonString)
+    editor.apply()
+}
+
+// ===== 通知监听与应用标题/开关的本地存储封装 =====
+fun getMainSwitch(context: Context): Boolean {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sp.getBoolean("notification_listener_enabled", false)
+}
+
+fun setMainSwitch(context: Context, value: Boolean) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putBoolean("notification_listener_enabled", value).apply()
+}
+
+fun getAppSwitch(context: Context, packageName: String): Boolean {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sp.getBoolean("listen_package_${packageName}", false)
+}
+
+fun setAppSwitch(context: Context, packageName: String, value: Boolean) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putBoolean("listen_package_${packageName}", value).apply()
+}
+
+fun getAppTitle(context: Context, packageName: String): String {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sp.getString("listen_title_${packageName}", "") ?: ""
+}
+
+fun setAppTitle(context: Context, packageName: String, title: String) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putString("listen_title_${packageName}", title).apply()
+}
+
+// 读取会话标题列表（优先使用新版 JSON Key，若存在则专用，不回退旧键）
+fun getAppTitles(
+    context: Context,
+    packageName: String,
+    count: Int = 5,
+    defaultFirst: String = ""
+): List<String> {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val jsonKey = "listen_titles_${packageName}"
+    // 若 JSON Key 存在，严格仅用该键（即使为空也不回退旧键）
+    if (sp.contains(jsonKey)) {
+        val jsonStr = sp.getString(jsonKey, null)
+        if (!jsonStr.isNullOrBlank()) {
+            try {
+                val arr = org.json.JSONArray(jsonStr)
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    list.add(arr.optString(i))
+                }
+                val cleaned = list.filter { it.isNotBlank() }
+                return if (cleaned.isNotEmpty()) cleaned else if (defaultFirst.isNotBlank()) listOf(defaultFirst) else emptyList()
+            } catch (_: Exception) {
+                // JSON 解析失败时返回空或默认
+                return if (defaultFirst.isNotBlank()) listOf(defaultFirst) else emptyList()
+            }
+        }
+        // JSON 字符串为空，返回空或默认
+        return if (defaultFirst.isNotBlank()) listOf(defaultFirst) else emptyList()
+    }
+
+    // 旧版本兼容：按多标题旧键读取
+    val titles = MutableList(count) { index ->
+        val key = "listen_title_${packageName}_${index + 1}"
+        sp.getString(key, "") ?: ""
+    }
+
+    // count 为 0 时 titles 为空，避免下标越界
+    if (titles.isEmpty()) {
+        val single = sp.getString("listen_title_${packageName}", "") ?: ""
+        return when {
+            single.isNotBlank() -> listOf(single)
+            defaultFirst.isNotBlank() -> listOf(defaultFirst)
+            else -> emptyList()
+        }
+    }
+
+    // 若全部为空，尝试单标题旧键
+    if (titles.all { it.isBlank() }) {
+        val single = sp.getString("listen_title_${packageName}", "") ?: ""
+        if (single.isNotBlank()) titles[0] = single
+    }
+
+    if (titles[0].isBlank() && defaultFirst.isNotBlank()) titles[0] = defaultFirst
+    return titles.filter { it.isNotBlank() }.ifEmpty { if (defaultFirst.isNotBlank()) listOf(defaultFirst) else emptyList() }
+}
+
+fun setAppTitleAt(context: Context, packageName: String, index: Int, title: String) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putString("listen_title_${packageName}_${index}", title).apply()
+}
+
+fun setAppTitles(context: Context, packageName: String, titles: List<String>) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val cleaned = titles.map { it.trim() }.filter { it.isNotBlank() }
+    val jsonArr = org.json.JSONArray()
+    cleaned.forEach { jsonArr.put(it) }
+    sp.edit().putString("listen_titles_${packageName}", jsonArr.toString()).apply()
+}
+
+// 提供给通知服务使用的别名函数，保持命名一致
+fun isMainSwitchEnabled(context: Context): Boolean = getMainSwitch(context)
+
+fun isAppSwitchEnabled(context: Context, packageName: String): Boolean = getAppSwitch(context, packageName)
+
+fun getTitleForPackage(context: Context, packageName: String, defaultTitle: String = ""): String {
+    val titles = getAppTitles(context, packageName, defaultFirst = defaultTitle)
+    return titles.firstOrNull()?.takeIf { it.isNotBlank() } ?: defaultTitle
+}
+
+fun getTitlesForPackage(context: Context, packageName: String, count: Int = 5, defaultFirst: String? = null): List<String> {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val jsonKey = "listen_titles_${packageName}"
+    if (sp.contains(jsonKey)) {
+        val jsonStr = sp.getString(jsonKey, null)
+        if (!jsonStr.isNullOrBlank()) {
+            return try {
+                val arr = org.json.JSONArray(jsonStr)
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) list.add(arr.optString(i))
+                list.filter { it.isNotBlank() }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        return emptyList()
+    }
+    // 旧键读取
+    val titles = MutableList(count) { index ->
+        val key = "listen_title_${packageName}_${index + 1}"
+        sp.getString(key, "") ?: ""
+    }
+    if (titles.all { it.isBlank() }) {
+        val single = sp.getString("listen_title_${packageName}", "") ?: ""
+        if (single.isNotBlank()) titles[0] = single
+    }
+    val cleaned = titles.filter { it.isNotBlank() }
+    return if (cleaned.isNotEmpty()) cleaned else if (defaultFirst != null && defaultFirst.isNotBlank()) listOf(defaultFirst) else emptyList()
+}
+
+object ThirdPartyDefaults {
+    const val PDD_PACKAGE = "com.xunmeng.pinduoduo"
+    const val DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
+    const val XHS_PACKAGE = "com.xingin.xhs"
+    const val WECHAT_PACKAGE = "com.tencent.mm"
+
+    fun defaultTitleFor(packageName: String): String = when (packageName) {
+        PDD_PACKAGE -> "商品待取件提醒"
+        DOUYIN_PACKAGE -> "包裹已放至自提柜/代收点"
+        XHS_PACKAGE -> "订单待取件"
+        else -> ""
+    }
+
+    const val WECHAT_DEFAULT_FIRST = "老婆"
+}
+
+@kotlinx.serialization.Serializable
+data class LogEntry(val timestamp: Long, val text: String, val version: String = "")
+
+private val logLock = Any()
+
+fun addLog(context: Context, text: String) {
+    val sanitizedText = text
+        .replace(Regex("(?i)(api[_ -]?key|authorization|bearer)\\s*[:=]?\\s*[^\\s,;]+"), "$1=[已隐藏]")
+        .replace(
+            Regex("(?i)(短信通知|通知保存|通知重复，已忽略(?:\\(2秒内重复\\))?|通知文本已在短信箱，跳过保存|PDD通知|抖音通知|小红书通知)[:：].*"),
+            "$1：[正文已隐藏]",
+        )
+    // 读-改-写整体加锁，避免多线程并发写日志互相覆盖丢失
+    synchronized(logLock) {
+        val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+        val arrStr = sp.getString("logs_json", null)
+        val list = try {
+            if (arrStr.isNullOrBlank()) mutableListOf<LogEntry>() else Json.decodeFromString<List<LogEntry>>(arrStr).toMutableList()
+        } catch (_: Exception) { mutableListOf() }
+        val ver = getAppVersionName(context)
+        list.add(LogEntry(System.currentTimeMillis(), sanitizedText, ver))
+        if (list.size > 500) {
+            list.subList(0, list.size - 500).clear()
+        }
+        sp.edit().putString("logs_json", Json.encodeToString(list)).apply()
+    }
+}
+
+fun getAppVersionName(context: Context): String {
+    return try {
+        val pm = context.packageManager
+        val pInfo = pm.getPackageInfo(context.packageName, 0)
+        pInfo.versionName ?: ""
+    } catch (_: Exception) { "" }
+}
+
+fun getLogs(context: Context, dayMillis: Long? = null): List<LogEntry> {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val arrStr = sp.getString("logs_json", null) ?: return emptyList()
+    val list = try { Json.decodeFromString<List<LogEntry>>(arrStr) } catch (_: Exception) { emptyList() }
+    if (dayMillis == null) return list.sortedByDescending { it.timestamp }
+    val cal = java.util.Calendar.getInstance().apply {
+        timeInMillis = dayMillis
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val start = cal.timeInMillis
+    cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+    val end = cal.timeInMillis
+    return list.filter { it.timestamp in start until end }.sortedByDescending { it.timestamp }
+}
+
+fun clearAllLogs(context: Context) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().remove("logs_json").apply()
+}
+
+fun hasCustomSameDayCode(context: Context, content: String): Boolean {
+    val parser = SmsParser()
+    loadCustomRulesToParser(context, parser)
+    val r = parser.parseSms(content)
+    if (!r.success) return false
+    val recent = getCustomSmsByTimeFilter(context, 1)
+    return recent.any { sms ->
+        val body = sms.body.removePrefix("【自定义取件短信】")
+        val rr = parser.parseSms(body)
+        rr.success && rr.address == r.address && rr.code == r.code && isSameDay(sms.timestamp, System.currentTimeMillis())
+    }
+}
+
+fun hasCustomSameDayBody(context: Context, content: String): Boolean {
+    val recent = getCustomSmsByTimeFilter(context, 1)
+    return recent.any { sms ->
+        val body = sms.body.removePrefix("【自定义取件短信】")
+        body == content && isSameDay(sms.timestamp, System.currentTimeMillis())
+    }
+}
+
+fun getSystemSmsNotifySwitch(context: Context): Boolean {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sp.getBoolean("listen_system_sms_notify", true)
+}
+
+fun setSystemSmsNotifySwitch(context: Context, value: Boolean) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putBoolean("listen_system_sms_notify", value).apply()
+}
+
+fun getSystemSmsPackages(context: Context): MutableSet<String> {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    return sp.getStringSet("system_sms_pkgs", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+}
+
+fun setSystemSmsPackages(context: Context, pkgs: Set<String>) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().putStringSet("system_sms_pkgs", pkgs.toSet()).apply()
+}
+
+fun addSystemSmsPackage(context: Context, pkg: String) {
+    val set = getSystemSmsPackages(context)
+    set.add(pkg)
+    setSystemSmsPackages(context, set)
+}
+
+fun removeSystemSmsPackage(context: Context, pkg: String) {
+    val set = getSystemSmsPackages(context)
+    set.remove(pkg)
+    setSystemSmsPackages(context, set)
+}
+
+// ===== 地址归类映射 =====
+@kotlinx.serialization.Serializable
+data class AddressMapping(val originalAddress: String, val tag: String)
+
+fun getAddressMappings(context: Context): Map<String, String> {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val jsonStr = sp.getString("address_mappings_json", null) ?: return emptyMap()
+    return try {
+        Json.decodeFromString<List<AddressMapping>>(jsonStr).associate { it.originalAddress to it.tag }
+    } catch (e: Exception) {
+        emptyMap()
+    }
+}
+
+fun saveAddressMapping(context: Context, originalAddress: String, tag: String) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val currentJson = sp.getString("address_mappings_json", null) ?: "[]"
+    val currentList = try {
+        Json.decodeFromString<List<AddressMapping>>(currentJson).toMutableList()
+    } catch (e: Exception) {
+        mutableListOf()
+    }
+    
+    // 移除旧的映射（如果有）
+    currentList.removeAll { it.originalAddress == originalAddress }
+    // 添加新的映射
+    currentList.add(AddressMapping(originalAddress, tag))
+    
+    sp.edit().putString("address_mappings_json", Json.encodeToString(currentList)).apply()
+}
+
+fun removeAddressMapping(context: Context, originalAddress: String) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    val currentJson = sp.getString("address_mappings_json", null) ?: return
+    val currentList = try {
+        Json.decodeFromString<List<AddressMapping>>(currentJson).toMutableList()
+    } catch (e: Exception) {
+        return
+    }
+    
+    currentList.removeAll { it.originalAddress == originalAddress }
+    sp.edit().putString("address_mappings_json", Json.encodeToString(currentList)).apply()
+}
+
+fun clearAddressMappings(context: Context) {
+    val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+    sp.edit().remove("address_mappings_json").apply()
+}
+
+fun getAllTags(context: Context): List<String> {
+    val mappings = getAddressMappings(context)
+    return mappings.values.toSet().toList()
+}
+
+@kotlinx.serialization.Serializable
+data class RulesExportData(
+    val version: String,
+    val exportTime: Long,
+    val addressRules: List<String>,
+    val codeRules: List<String>,
+    val lockerRules: List<String>,
+    val ignoreKeywords: List<String>
+)
+
+fun exportRulesToJson(context: Context): String {
+    val data = RulesExportData(
+        version = "1",
+        exportTime = System.currentTimeMillis(),
+        addressRules = getCustomList(context, "address").toList(),
+        codeRules = getCustomList(context, "code").toList(),
+        lockerRules = getCustomList(context, "locker").toList(),
+        ignoreKeywords = getCustomList(context, "ignoreKeywords").toList()
+    )
+    return Json.encodeToString(data)
+}
+
+fun importRulesFromJson(context: Context, viewModel: ParcelViewModel, json: String) {
+    try {
+        val data: RulesExportData = Json.decodeFromString(json)
+        data.addressRules.filter { it.isNotBlank() }.forEach { rule ->
+            addCustomList(context, "address", rule)
+            viewModel.addCustomAddressPattern(rule)
+        }
+        data.codeRules.filter { it.isNotBlank() }.forEach { rule ->
+            addCustomList(context, "code", rule)
+            viewModel.addCustomCodePattern(rule)
+        }
+        data.lockerRules.filter { it.isNotBlank() }.forEach { rule ->
+            addCustomList(context, "locker", rule)
+            viewModel.addCustomLockerPattern(rule)
+        }
+        data.ignoreKeywords.filter { it.isNotBlank() }.forEach { keyword ->
+            addCustomList(context, "ignoreKeywords", keyword)
+            viewModel.addIgnoreKeyword(keyword)
+        }
+        addLog(context, "规则导入完成: 地址${data.addressRules.size}条, 取件码${data.codeRules.size}条, 柜号${data.lockerRules.size}条, 忽略词${data.ignoreKeywords.size}条")
+    } catch (e: Exception) {
+        addLog(context, "规则导入解析失败: ${e.message}")
+        throw e
+    }
+}
+
+// ===== v2.0 整站备份（R12，对齐 Web 导出 {version, exportTime, settings, rules, mappings}） =====
+@kotlinx.serialization.Serializable
+data class BackupWallpaper(
+    val enabled: Boolean,
+    val uri: String,
+    val blurRadius: Float,
+    val overlayAlpha: Float,
+    val gradientAlpha: Float,
+    val alignmentX: Float,
+    val alignmentY: Float,
+    val brightness: Float,
+    val contrast: Float,
+    val fitContain: Boolean,
+)
+
+@kotlinx.serialization.Serializable
+data class BackupSettings(
+    val themeMode: Int,
+    val seniorMode: Boolean,
+    val sortByLocker: Boolean,
+    val horizontalLayout: Boolean,
+    val showCodeTime: Boolean,
+    val wallpaper: BackupWallpaper,
+)
+
+@kotlinx.serialization.Serializable
+data class FullBackupData(
+    val version: String,
+    val exportTime: Long,
+    val settings: BackupSettings,
+    val rules: RulesExportData,
+    val mappings: List<AddressMapping>,
+    val aiConfig: com.chenran.parcel.util.ai.AiConfig,
+)
+
+/** 导出整站配置 JSON（设置 + 规则 + 地址映射）。 */
+private const val AI_CONFIG_KEY = "ai_config_json"
+private const val AI_PARSE_CACHE_KEY = "ai_parse_cache"
+
+fun getAiConfig(context: Context): com.chenran.parcel.util.ai.AiConfig {
+    val prefs = context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+    val raw = prefs.getString(AI_CONFIG_KEY, null)
+    val decoded = raw?.let {
+        runCatching { Json.decodeFromString<com.chenran.parcel.util.ai.AiConfig>(it) }.getOrNull()
+    } ?: com.chenran.parcel.util.ai.AiConfig()
+    var secureKey = SecureSecretStore.getAiApiKey(context)
+    val hadPlaintextKey = decoded.apiKey.isNotBlank()
+    val secretMigrationSucceeded = if (hadPlaintextKey && secureKey.isBlank()) {
+        SecureSecretStore.saveAiApiKey(context, decoded.apiKey).also { success ->
+            if (success) secureKey = decoded.apiKey
+        }
+    } else {
+        true
+    }
+    val migrated = decoded.copy(
+        apiKey = secureKey.ifBlank { decoded.apiKey },
+        autoParseSince = if (decoded.enabled && decoded.autoParseSince <= 0L) {
+            System.currentTimeMillis()
+        } else {
+            decoded.autoParseSince
+        },
+    )
+    if (secretMigrationSucceeded && (hadPlaintextKey || migrated.autoParseSince != decoded.autoParseSince)) {
+        prefs.edit()
+            .putString(AI_CONFIG_KEY, Json.encodeToString(migrated.copy(apiKey = "")))
+            .apply()
+    }
+    return migrated
+}
+
+fun saveAiConfig(
+    context: Context,
+    config: com.chenran.parcel.util.ai.AiConfig,
+    preserveStoredApiKeyWhenBlank: Boolean = false,
+): Boolean {
+    val current = context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+        .getString(AI_CONFIG_KEY, null)
+        ?.let { runCatching { Json.decodeFromString<com.chenran.parcel.util.ai.AiConfig>(it) }.getOrNull() }
+    val enablingNow = config.enabled && current?.enabled != true
+    val normalized = if (enablingNow || (config.enabled && config.autoParseSince <= 0L)) {
+        config.copy(autoParseSince = System.currentTimeMillis())
+    } else {
+        config
+    }
+    if (!(preserveStoredApiKeyWhenBlank && normalized.apiKey.isBlank()) &&
+        !SecureSecretStore.saveAiApiKey(context, normalized.apiKey)
+    ) {
+        return false
+    }
+    context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE).edit()
+        .putString(AI_CONFIG_KEY, Json.encodeToString(normalized.copy(apiKey = "")))
+        .apply()
+    return true
+}
+
+fun getAiParseCache(context: Context): MutableMap<String, com.chenran.parcel.util.ai.AiParseResult> {
+    val raw = context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE).getString(AI_PARSE_CACHE_KEY, null) ?: return mutableMapOf()
+    return runCatching {
+        Json.decodeFromString<Map<String, com.chenran.parcel.util.ai.AiParseResult>>(raw).toMutableMap()
+    }.getOrDefault(mutableMapOf())
+}
+
+fun saveAiParseCache(context: Context, key: String, result: com.chenran.parcel.util.ai.AiParseResult) {
+    val cache = getAiParseCache(context)
+    cache[key] = result
+    while (cache.size > 500) cache.remove(cache.keys.first())
+    context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE).edit()
+        .putString(AI_PARSE_CACHE_KEY, Json.encodeToString(cache)).apply()
+}
+
+fun exportFullBackupJson(context: Context): String {
+    val wpSettings = BackgroundManager.getWallpaperSettings(context)
+    val data = FullBackupData(
+        version = "2",
+        exportTime = System.currentTimeMillis(),
+        settings = BackupSettings(
+            themeMode = ThemeManager.getThemeMode(context),
+            seniorMode = SeniorModeManager.getSeniorMode(context),
+            sortByLocker = getSortByLocker(context),
+            horizontalLayout = try {
+                context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("horizontal_layout", false)
+            } catch (_: Exception) { false },
+            showCodeTime = try {
+                context.getSharedPreferences("parcel_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("show_code_time", true)
+            } catch (_: Exception) { true },
+            wallpaper = BackupWallpaper(
+                enabled = BackgroundManager.isWallpaperEnabled(context),
+                uri = BackgroundManager.getHomeWallpaperUri(context),
+                blurRadius = wpSettings.blurRadius,
+                overlayAlpha = wpSettings.overlayAlpha,
+                gradientAlpha = wpSettings.gradientAlpha,
+                alignmentX = wpSettings.alignmentX,
+                alignmentY = wpSettings.alignmentY,
+                brightness = wpSettings.brightness,
+                contrast = wpSettings.contrast,
+                fitContain = wpSettings.fitContain,
+            ),
+        ),
+        rules = RulesExportData(
+            version = "1",
+            exportTime = System.currentTimeMillis(),
+            addressRules = getCustomList(context, "address").toList(),
+            codeRules = getCustomList(context, "code").toList(),
+            lockerRules = getCustomList(context, "locker").toList(),
+            ignoreKeywords = getCustomList(context, "ignoreKeywords").toList(),
+        ),
+        mappings = getAddressMappings(context).map { (addr, tag) ->
+            AddressMapping(addr, tag)
+        },
+        aiConfig = getAiConfig(context).copy(apiKey = ""),
+    )
+    return Json.encodeToString(data)
+}

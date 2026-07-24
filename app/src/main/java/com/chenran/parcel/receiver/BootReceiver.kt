@@ -1,0 +1,60 @@
+package com.chenran.parcel.receiver
+
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.app.NotificationManagerCompat
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.chenran.parcel.service.ParcelNotificationListenerService
+import com.chenran.parcel.widget.ParcelWidget
+import com.chenran.parcel.widget.ParcelWidgetLarge
+import com.chenran.parcel.widget.ParcelWidgetXL
+import com.chenran.parcel.worker.NotificationListenerHealthWorker
+import java.util.concurrent.TimeUnit
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val action = intent?.action
+        if (action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_USER_UNLOCKED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            // 仅通知监听服务重绑需要权限门控；widget 刷新与 Worker 调度不依赖该权限
+            val enabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+            if (enabled) {
+                val pm = context.packageManager
+                val cn = ComponentName(context, ParcelNotificationListenerService::class.java)
+                pm.setComponentEnabledSetting(
+                    cn,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP,
+                )
+                pm.setComponentEnabledSetting(
+                    cn,
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP,
+                )
+            }
+
+            try {
+                ParcelWidget.refreshProviderAsync(context, ParcelWidget::class.java)
+                ParcelWidget.refreshProviderAsync(context, ParcelWidgetLarge::class.java)
+                ParcelWidget.refreshProviderAsync(context, ParcelWidgetXL::class.java)
+            } catch (_: Throwable) {}
+
+            try {
+                val healthWork = PeriodicWorkRequestBuilder<NotificationListenerHealthWorker>(
+                    15, TimeUnit.MINUTES
+                ).build()
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    NotificationListenerHealthWorker.WORK_NAME,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    healthWork
+                )
+            } catch (_: Throwable) {}
+        }
+    }
+}

@@ -1,24 +1,48 @@
-﻿# Secrets
-*.jks
-*.keystore
+*.iml
+.gradle
+.gradle-user-home/
+.gradle_r8_build/
+.gradle_final/
+.gradle_fresh/
+.build_env/
+.jdk/
+.android/
+.android_final/
+.android_fresh/
+.kotlin/
+build/
+/local.properties
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
 key.properties
+.kotlin
+.vscode
+.idea/
+
+*.keystore
+*.jks
 *.p12
 *.pem
+*.p8
+secrets.properties
+.env
+.env.*
+credentials.json
+service-account.json
+google-services.json
 
-# Build
-.gradle/
-build/
-local.properties
-.idea/
-*.iml
-*.log
+*.apk
+*.aab
+*.ap_
+*.dex
 
-# OS
-.DS_Store
-Thumbs.db
-
-# gh CLI
-gh.exe
-
-
-*.idsig
+*.secret
+*.password
+*.token
+*_password.*
+*_secret.*
+*_key.*

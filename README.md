@@ -2,7 +2,23 @@
 
 ---
 
-基于 [shareven/parcel](https://github.com/shareven/parcel) 增强开发，这是一个免费、开源、无广告、不联网，追求简洁的app，不收集任何个人信息。
+> 🚀 **Web 对齐、AI 自动解析与 Release 优化已完成静态交付（v2.2，Round 8-23）**：以 Web 参考版 `--main` 为标准升级 UI、导航、设置、身份码和导出体验，并补齐 Android 后台 AI 自动解析。
+> 支持 `REGEX_ONLY` / `AI_PREFERRED` / `AI_ONLY` 三策略，只自动处理启用后的新消息；系统短信、通知与手动录入统一摄取，正文级指纹防重复提交；支持高置信度地址归类、失败有限重试、单条重新解析和全局请求节流。
+> API Key 使用 Android Keystore AES/GCM 保存，不进入配置备份；日志隐藏通知正文与认证信息；解析账本与额度已迁移 Room；Release 只产出 `arm64-v8a` APK 并开启 R8 压缩。
+> 开发阶段按约束未执行 Gradle 构建，最终仍需在 Android Studio 统一构建和真机验收。
+>
+> | 文档 | 说明 |
+> |------|------|
+> | [docs/ANALYSIS.md](docs/ANALYSIS.md) | 差异分析报告：Android 现状 vs Web 参考版（四维度） |
+> | [docs/GOAL.md](docs/GOAL.md) | 最终交付目标与完成标准（G1-G8） |
+> | [docs/PRD.md](docs/PRD.md) | 产品需求文档：改造目标、范围、设计规范、验收标准 |
+> | [docs/SOP.md](docs/SOP.md) | 标准作业流程：每轮"执行→静态验证→Review→快照"规范 |
+> | [docs/ROADMAP.md](docs/ROADMAP.md) | 分轮路线图：Round 8-23 目标、实现与验收边界 |
+> | [docs/snapshots/](docs/snapshots/) | 每轮变更快照记录 |
+
+---
+
+基于 [shareven/parcel](https://github.com/shareven/parcel) 增强开发。默认本地解析、不收集个人信息；只有用户显式启用 AI 时，才会把用于识别取件信息的短信正文发送到用户自行配置的服务商。
 
 本app会自动解析收到的短信，并从中提取出地址和取件码信息，可以展示到桌面卡片上（支持暗色模式）。
 
